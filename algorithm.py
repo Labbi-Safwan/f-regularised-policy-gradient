@@ -13,7 +13,7 @@ import jax
  
 @partial(jax.jit, static_argnums=(2, 3))
 def f_tsallis_softmax_jax(
-    theta: chex.Array, prior: chex.Array, alpha: float, eps: float = 1e-6
+    theta: chex.Array, prior: chex.Array, alpha: float, eps: float = 1e-6, max_iter: int = 30
 ) -> tuple[chex.Array, float]:
     """
     Compute the f-softmax of a vector theta using the provided functions f_prime and f_star_prime.
@@ -29,6 +29,7 @@ def f_tsallis_softmax_jax(
     Returns:
     tuple[np.ndarray, float]: The f-softargmax of the input vector theta and f-softmax
     """
+    jax.debug.print("Start!")
     j_star = jnp.argmax(theta)
     theta_max = jnp.max(theta)
     prior_star = prior[j_star]
@@ -40,12 +41,11 @@ def f_tsallis_softmax_jax(
     phi_tau = jnp.sum(p_tau) - 1
  
     def cond_fun(state):
-        _, _, phi_tau = state
-        jax.debug.print("phi_tau = {}", phi_tau)
-        return jnp.abs(phi_tau) > eps
+        iter, _, _, phi_tau = state
+        return (jnp.abs(phi_tau) > eps) & (iter < max_iter)
  
     def body_fun(state):
-        tau_min, tau_max, phi_tau = state
+        iter, tau_min, tau_max, phi_tau = state
         tau = (tau_min + tau_max) / 2.0
         # jax.lax.cond is a functional equivalent of if/else
         tau_min, tau_max = jax.lax.cond(
@@ -56,18 +56,19 @@ def f_tsallis_softmax_jax(
         tau = (tau_min + tau_max) / 2.0
         p_tau = prior * (1 + (alpha - 1.0) * (theta - tau)) ** (1.0 / (alpha - 1.0))
         phi_tau = jnp.sum(p_tau) - 1
-        return tau_min, tau_max, phi_tau
+        return iter+1, tau_min, tau_max, phi_tau
  
     # Initial state for the loop
-    init_state = (tau_min, tau_max, phi_tau)
+    init_state = (0, tau_min, tau_max, phi_tau)
     # Run the bisection loop
-    tau_min, tau_max, _ = jax.lax.while_loop(cond_fun, body_fun, init_state)
+    iter, tau_min, tau_max, _ = jax.lax.while_loop(cond_fun, body_fun, init_state)
     tau = (tau_min + tau_max) / 2
     p_tau = prior * (1 + (alpha - 1.0) * (theta - tau)) ** (1.0 / (alpha - 1.0))
  
     fsoftmax = tau + jnp.sum(
         prior * ((1 + (alpha - 1.0) * (theta - tau)) ** (alpha / (alpha - 1.0)) - 1.0) / alpha
     )
+    jax.debug.print("end!")
     return p_tau, fsoftmax
  
  
@@ -226,6 +227,7 @@ class fPG:
                 policy_state = np.clip(policy_state, 0, None)
                 policy_state /= policy_state.sum()
                 policy[state,:] = policy_state
+            
             avg_return = self.compute_objective(policy)
             true_objectives.append(avg_return)
 
@@ -233,7 +235,9 @@ class fPG:
             #minimal_probability.append(minimal_probability_iteration)
             if self.verbose:
                 print('Iteration Number:',t)
-                print(avg_return)
+                print('Policy:', policy)
+                print('Theta:', theta)
+                print('Return:', avg_return)
             #print('agent',m)
             env = self.env
             trajectories = []
