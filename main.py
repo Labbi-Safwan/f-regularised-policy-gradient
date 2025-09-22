@@ -30,7 +30,7 @@ def run_fpg(argument):
     env = argument[2]
     step_size = argument[3]
     temp = argument[4]
-    true_objective_values_file =  full_path +  '/' +  ',step_'+ str(step_size) + ',temperature_'+ str(temperature)+ ',run_'+str(run) +',true_objective.pkl'
+    true_objective_values_file =  full_path +  '/' +  ',step_'+ str(step_size) + ',temperature_'+ str(temp)+ ',run_'+str(run) +',true_objective.pkl'
     np.random.seed(run)
     dict  = argument[5]
     fpg_method = fPG(env, step_size, temp,  **dict)
@@ -40,14 +40,14 @@ def run_fpg(argument):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='launching the experiment')
-    parser.add_argument("--alpha", type=float, default=0.5, help="choose the parameter for the tsallis algorithm")
+    parser.add_argument("--alpha", type=float, default=1, help="choose the parameter for the tsallis algorithm")
     parser.add_argument("--environment", type=int, default=0, help="0 is for the Gridword environment")
     parser.add_argument("--discount", type=float, default=0.99, help="Discount factor")
-    parser.add_argument("--step", type=float, nargs="+", default=[0.001], help="Step size")
+    parser.add_argument("--step", type=float, nargs="+", default=[0.1], help="Step size")
     parser.add_argument("--n_iteration", type=float, default=10000, help="Number of iteration T")    
     parser.add_argument("--temperature", type=float, nargs="+", default=[0.05], help="temperature lambda(s)")
     parser.add_argument("--runs", type=int, default=5, help="number of runs")
-    parser.add_argument("--len_truncation", type=int, default=20, help="lenght  of the truncation H")
+    parser.add_argument("--len_truncation", type=int, default=30, help="lenght  of the truncation H")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size per iteration B")
     parser.add_argument("--verbose", type=bool, default=True, help="verbose")
 
@@ -65,13 +65,13 @@ if __name__ == '__main__':
     create_folder_if_not_exists(parent_directory)
     np.random.seed(0)
     for step in steps:
-        for temperature in temeperatures:
+        for temp in temeperatures:
             if args.environment ==0:
                 env = GridWorld(3, 3, walls=((1, 1),(1,1)), success_probability=0.8)
                 full_path = parent_directory
                 seeds = [k for k in range(args.runs)] 
                 with concurrent.futures.ProcessPoolExecutor(max_workers=runs) as executor:
-                    arguments = [[full_path, seed, env, step, temperature, args_dict] for seed in seeds]
+                    arguments = [[full_path, seed, env, step, temp, args_dict] for seed in seeds]
                     run_fpg(arguments[0])
                     #results = list(executor.map(run_fpg, arguments))   
             else:

@@ -13,7 +13,7 @@ import jax
  
 @partial(jax.jit, static_argnums=(2, 3))
 def f_tsallis_softmax_jax(
-    theta: chex.Array, prior: chex.Array, alpha: float, eps: float = 1e-6, max_iter: int = 30
+    theta: chex.Array, prior: chex.Array, alpha: float, eps: float = 1e-6, max_iter: int = 3000
 ) -> tuple[chex.Array, float]:
     """
     Compute the f-softmax of a vector theta using the provided functions f_prime and f_star_prime.
@@ -29,7 +29,7 @@ def f_tsallis_softmax_jax(
     Returns:
     tuple[np.ndarray, float]: The f-softargmax of the input vector theta and f-softmax
     """
-    jax.debug.print("Start!")
+    #jax.debug.print("Start!")
     j_star = jnp.argmax(theta)
     theta_max = jnp.max(theta)
     prior_star = prior[j_star]
@@ -68,16 +68,14 @@ def f_tsallis_softmax_jax(
     fsoftmax = tau + jnp.sum(
         prior * ((1 + (alpha - 1.0) * (theta - tau)) ** (alpha / (alpha - 1.0)) - 1.0) / alpha
     )
-    jax.debug.print("end!")
+    #jax.debug.print("end!")
     return p_tau, fsoftmax
  
  
 def f_tsallis_softmax(theta, prior, alpha, eps=1e-6):
     jax_theta = jnp.array(theta)
     jax_prior = jnp.array(prior)
-    print('before_jax')
     dist, fsoftmax = f_tsallis_softmax_jax(jax_theta, jax_prior, alpha, eps)
-    print('after_jax')
 
     return np.array(dist), float(fsoftmax)
 
@@ -135,7 +133,6 @@ class fPG:
         if self.alpha ==1:
             probs = softmax_policy(logits, self.prior)
         else:
-            print(self.alpha)
             probs = f_tsallis_softmax(logits, self.prior, self.alpha, eps=1e-6)
         return probs
     
@@ -158,10 +155,10 @@ class fPG:
         else:
             ref_probs = self.prior    
             u = probs / ref_probs
-            fpp = u ** (self.alpha - 2)
+            fpp = ref_probs * u ** (2- self.alpha)
 
             # normalizing denominator W^f(s)
-            W = np.sum(ref_probs * fpp)
+            W = np.sum(fpp)
 
             # weights w^f_θ(a|s)
             w = fpp / W
@@ -179,10 +176,10 @@ class fPG:
         if self.alpha < 1:
             ref_probs = self.prior    
             u = probs / ref_probs
-            fpp = u ** (self.alpha - 2)
+            fpp = ref_probs *u ** (2- self.alpha)
 
             # normalizing denominator W^f(s)
-            W = np.sum(ref_probs * fpp)
+            W = np.sum(fpp)
 
             # weights w^f_θ(a|s)
             w = fpp / W
@@ -194,14 +191,14 @@ class fPG:
             f_u_prime = (np.power(u, self.alpha-1) - 1.0) / (self.alpha - 1.0)
             divergence_f_prime = np.sum(w * f_u_prime)
             for b in range(self.A):
-                F[state, b] = W * fpp[b] * ( f_u_prime[b] - divergence_f_prime )    
+                F[state, b] = W * w[b] * ( f_u_prime[b] - divergence_f_prime )    
         else:
             ref_probs = self.prior    
             u = probs / ref_probs
-            fpp = u ** (- 1)
+            fpp = ref_probs*u 
 
             # normalizing denominator W^f(s)
-            W = np.sum(ref_probs * fpp)
+            W = np.sum(fpp)
 
             # weights w^f_θ(a|s)
             w = fpp / W
@@ -213,7 +210,7 @@ class fPG:
             f_u_prime = np.log(u)
             divergence_f_prime = np.sum(w * f_u_prime)
             for b in range(self.A):
-                F[state, b] = W * fpp[b] * ( f_u_prime[b] - divergence_f_prime )         
+                F[state, b] = W * w[b] * ( f_u_prime[b] - divergence_f_prime )         
         return F
 
     def train(self):
@@ -223,7 +220,10 @@ class fPG:
         for t in range(self.T):
             policy = np.zeros((self.S, self.A))
             for state in range(self.S):
-                policy_state = self.compute_policy(theta, state)[0]
+                if self.alpha == 1:
+                    policy_state = self.compute_policy(theta, state)
+                else:    
+                    policy_state = self.compute_policy(theta, state)[0]
                 policy_state = np.clip(policy_state, 0, None)
                 policy_state /= policy_state.sum()
                 policy[state,:] = policy_state
@@ -235,10 +235,9 @@ class fPG:
             #minimal_probability.append(minimal_probability_iteration)
             if self.verbose:
                 print('Iteration Number:',t)
-                print('Policy:', policy)
-                print('Theta:', theta)
+                #print('Policy:', policy)
+                #print('Theta:', theta)
                 print('Return:', avg_return)
-            #print('agent',m)
             env = self.env
             trajectories = []
             for _ in range(self.B): 
@@ -262,6 +261,7 @@ class fPG:
                 for t, (s_t, a_t, r_t) in enumerate(trajectory):
                     # Accumulate gradient sum up to time t
                     grad_log_pi_t = self.compute_grad_log_pi(policy[s_t,:], s_t, a_t)
+                    #print(grad_log_pi_t)
                     cumulative_grad_log_pi += grad_log_pi_t
 
                     # Add contribution to total gradient
@@ -269,8 +269,7 @@ class fPG:
                     grads += (self.gamma ** t) * cumulative_grad_log_pi * r_t
                     grads -= self.temperature * (self.gamma ** t) * cumulative_grad_log_pi * divergence
                     function_F = self.compute_vector_F(policy[s_t,:],s_t)
-                    grads += (self.gamma ** t) * function_F
-
+                    grads -= self.temperature*(self.gamma ** t) * function_F
             # Average over B trajectories
             grads /= self.B
             #print(grads)
