@@ -262,20 +262,20 @@ class FDivergence(metaclass=abc.ABCMeta):
 
 def alpha_log(u: chex.Array, alpha: float = 1.0) -> jax.Array:
   """Alpha logarithm."""
-  if alpha == 1.0:
-    return jnp.log(u)
-  else:
-    alpha_m1 = alpha - 1.0
-    return (jnp.power(u, alpha_m1) - 1) / alpha_m1
+  # if alpha == 1.0:
+  #   return jnp.log(u)
+  # else:
+  alpha_m1 = alpha - 1.0
+  return (jnp.power(u, alpha_m1) - 1) / alpha_m1
 
 
 def alpha_exp(v: chex.Array, alpha: float = 1.0) -> jax.Array:
   """Alpha exponential."""
-  if alpha == 1.0:
-    return jnp.exp(v)
-  else:
-    alpha_m1 = alpha - 1.0
-    return jnp.power(1 + alpha_m1 * v, 1./ alpha_m1)
+  # if alpha == 1.0:
+  #   return jnp.exp(v)
+  # else:
+  alpha_m1 = alpha - 1.0
+  return jnp.power(1 + alpha_m1 * v, 1./ alpha_m1)
 
 
 class AlphaDivergence(FDivergence):
@@ -291,19 +291,16 @@ class AlphaDivergence(FDivergence):
 
   @property
   def sparse(self) -> bool:
-    if self.alpha > 1:
-      return True
-    else:
-      return False
+    return False
 
   def generating_function(self, u: chex.Array) -> jax.Array:
     """Generating function (`f`) of the divergence."""
-    if self.alpha == 1.0:
-      return jax.scipy.special.xlogy(u, u) - (u - 1)
-    else:
-      return (jnp.power(u, self.alpha) - 1 - self.alpha * (u - 1)) / (
-          self.alpha * (self.alpha - 1)
-      )
+    # if self.alpha == 1.0:
+    #   return jax.scipy.special.xlogy(u, u) - (u - 1)
+    # else:
+    return (jnp.power(u, self.alpha) - 1 - self.alpha * (u - 1)) / (
+        self.alpha * (self.alpha - 1)
+    )
 
   def generating_function_derivative(self, u: chex.Array) -> jax.Array:
     """Derivative of the function `f`."""
@@ -311,12 +308,12 @@ class AlphaDivergence(FDivergence):
 
   def generating_function_conjugate(self, v: chex.Array) -> jax.Array:
     """Convex conjugate of the function `f`."""
-    if self.alpha == 1.0:
-      return jnp.exp(v) - 1.0
-    else:
-      u = alpha_exp(v, alpha=self.alpha)
-      # TODO(mblondel): check if we can simplify this expression.
-      return u * v - self.generating_function(u)
+    # if self.alpha == 1.0:
+    #   return jnp.exp(v) - 1.0
+    # else:
+    u = alpha_exp(v, alpha=self.alpha)
+    # TODO(mblondel): check if we can simplify this expression.
+    return u * v - self.generating_function(u)
 
   def generating_function_conjugate_derivative(
       self, v: chex.Array
@@ -354,6 +351,7 @@ def make_bisection(
     verbose: bool = False,
     use_implicit_diff: bool = True,
     debug: bool = False,
+    use_scan: bool = True,
 ) -> Callable[..., chex.Numeric]:
   """Make a bisection function.
 
@@ -396,16 +394,33 @@ def make_bisection(
 
     # We use a native Python loop without stopping criterion on purpose
     # to avoid branching, so as to make code run faster on TPU.
-    for it in range(1, num_iter + 1):
-      value = value_fn(mid, *args, **kwargs)
-      too_large = sign_ * value > 0
-      upper = jnp.where(too_large, mid, upper)
-      lower = jnp.where(too_large, lower, mid)
-      mid = jnp.where(value == 0, mid, 0.5 * (lower + upper))
+    if use_scan:
+      def scan_body(carry, it):
+        lower, upper, mid = carry
+        value = value_fn(mid, *args, **kwargs)
+        too_large = sign_ * value > 0
+        upper = jnp.where(too_large, mid, upper)
+        lower = jnp.where(too_large, lower, mid)
+        mid = jnp.where(value == 0, mid, 0.5 * (lower + upper))
 
-      if verbose:
-        error = jnp.abs(value)
-        jax.debug.print("Bisection {it}: {error}", it=it, error=error)
+        if verbose:
+          error = jnp.abs(value)
+          jax.debug.print("Bisection {it}: {error}", it=it, error=error)
+        return (lower, upper, mid), None
+      (lower, upper, mid), _ = jax.lax.scan(
+          scan_body, (lower, upper, mid), jnp.arange(1, num_iter + 1)
+      )
+    else:
+      for it in range(1, num_iter + 1):
+        value = value_fn(mid, *args, **kwargs)
+        too_large = sign_ * value > 0
+        upper = jnp.where(too_large, mid, upper)
+        lower = jnp.where(too_large, lower, mid)
+        mid = jnp.where(value == 0, mid, 0.5 * (lower + upper))
+
+        if verbose:
+          error = jnp.abs(value)
+          jax.debug.print("Bisection {it}: {error}", it=it, error=error)
 
     return mid
 
