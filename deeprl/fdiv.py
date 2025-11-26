@@ -56,7 +56,6 @@ We can define a binary classification loss as
     := f_softplus(scores; beta, q) +
        beta * f_div((1 - pi, pi), q) -
        scores * labels.
-
 """
 
 import abc
@@ -262,20 +261,20 @@ class FDivergence(metaclass=abc.ABCMeta):
 
 def alpha_log(u: chex.Array, alpha: float = 1.0) -> jax.Array:
   """Alpha logarithm."""
-  # if alpha == 1.0:
-  #   return jnp.log(u)
-  # else:
-  alpha_m1 = alpha - 1.0
-  return (jnp.power(u, alpha_m1) - 1) / alpha_m1
+  if alpha == 1.0:
+    return jnp.log(u)
+  else:
+    alpha_m1 = alpha - 1.0
+    return (jnp.power(u, alpha_m1) - 1) / alpha_m1
 
 
 def alpha_exp(v: chex.Array, alpha: float = 1.0) -> jax.Array:
   """Alpha exponential."""
-  # if alpha == 1.0:
-  #   return jnp.exp(v)
-  # else:
-  alpha_m1 = alpha - 1.0
-  return jnp.power(1 + alpha_m1 * v, 1./ alpha_m1)
+  if alpha == 1.0:
+    return jnp.exp(v)
+  else:
+    alpha_m1 = alpha - 1.0
+    return jnp.power(1 + alpha_m1 * v, 1./ alpha_m1)
 
 
 class AlphaDivergence(FDivergence):
@@ -291,16 +290,19 @@ class AlphaDivergence(FDivergence):
 
   @property
   def sparse(self) -> bool:
-    return False
+    if self.alpha > 1:
+      return True
+    else:
+      return False
 
   def generating_function(self, u: chex.Array) -> jax.Array:
     """Generating function (`f`) of the divergence."""
-    # if self.alpha == 1.0:
-    #   return jax.scipy.special.xlogy(u, u) - (u - 1)
-    # else:
-    return (jnp.power(u, self.alpha) - 1 - self.alpha * (u - 1)) / (
-        self.alpha * (self.alpha - 1)
-    )
+    if self.alpha == 1.0:
+      return jax.scipy.special.xlogy(u, u) - (u - 1)
+    else:
+      return (jnp.power(u, self.alpha) - 1 - self.alpha * (u - 1)) / (
+          self.alpha * (self.alpha - 1)
+      )
 
   def generating_function_derivative(self, u: chex.Array) -> jax.Array:
     """Derivative of the function `f`."""
@@ -308,12 +310,12 @@ class AlphaDivergence(FDivergence):
 
   def generating_function_conjugate(self, v: chex.Array) -> jax.Array:
     """Convex conjugate of the function `f`."""
-    # if self.alpha == 1.0:
-    #   return jnp.exp(v) - 1.0
-    # else:
-    u = alpha_exp(v, alpha=self.alpha)
-    # TODO(mblondel): check if we can simplify this expression.
-    return u * v - self.generating_function(u)
+    if self.alpha == 1.0:
+      return jnp.exp(v) - 1.0
+    else:
+      u = alpha_exp(v, alpha=self.alpha)
+      # TODO(mblondel): check if we can simplify this expression.
+      return u * v - self.generating_function(u)
 
   def generating_function_conjugate_derivative(
       self, v: chex.Array
