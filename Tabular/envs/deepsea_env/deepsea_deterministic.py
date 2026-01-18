@@ -1,4 +1,3 @@
-# envs/deepsea_stochastic_env/deepsea_stochastic_jax.py
 
 from typing import Any, Optional, Dict, Tuple
 
@@ -9,9 +8,6 @@ from flax import struct
 from gymnax.environments import environment, spaces
 
 
-# ---------------------------------------------------------------------
-#  State and Params
-# ---------------------------------------------------------------------
 @struct.dataclass
 class EnvState(environment.EnvState):
     row: int
@@ -34,9 +30,6 @@ class EnvParams(environment.EnvParams):
     max_steps_in_episode: int = 2000
 
 
-# ---------------------------------------------------------------------
-#  Stochastic DeepSea env (JAX)
-# ---------------------------------------------------------------------
 class DeepSeaDet(environment.Environment):
     """
     JAX implementation of bsuite DeepSea with stochastic dynamics.
@@ -57,13 +50,9 @@ class DeepSeaDet(environment.Environment):
     def __init__(self, size: int = 8):
         super().__init__()
         self.size = size
-        # default action mapping (used when sample_action_map=False and
-        # randomize_actions=False, or carried across episodes)
+
         self._default_action_mapping = jnp.ones((size, size), dtype=jnp.int32)
 
-    # ------------------------------------------------------------------
-    # Default parameters
-    # ------------------------------------------------------------------
     @property
     def default_params(self) -> EnvParams:
         # stochastic: deterministic=False by default
@@ -75,9 +64,7 @@ class DeepSeaDet(environment.Environment):
             max_steps_in_episode=2000,
         )
 
-    # ------------------------------------------------------------------
-    # Core step
-    # ------------------------------------------------------------------
+
     def step_env(
         self,
         key: jax.Array,
@@ -89,7 +76,6 @@ class DeepSeaDet(environment.Environment):
 
         key_reward, key_trans = jax.random.split(key)
         rand_reward = jax.random.normal(key_reward, shape=())
-        # slip variable: True with prob (1 - 1/N)
         rand_trans_cond = (
             jax.random.uniform(key_trans, shape=(), minval=0.0, maxval=1.0)
             > 1.0 / self.size
@@ -100,11 +86,9 @@ class DeepSeaDet(environment.Environment):
         right_rand_cond = jnp.logical_or(rand_trans_cond, params.deterministic)
         right_cond = jnp.logical_and(action_right, right_rand_cond)
 
-        # reward + denoised_return update
         reward, denoised_return = _step_reward(
             state, action_right, right_cond, rand_reward, self.size, params
         )
-        # transition update
         column, row, bad_episode = _step_transition(
             state, action_right, right_cond, self.size
         )
@@ -129,21 +113,17 @@ class DeepSeaDet(environment.Environment):
 
         return obs, new_state, reward, done, info
 
-    # ------------------------------------------------------------------
-    # Reset
-    # ------------------------------------------------------------------
+
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> Tuple[jax.Array, EnvState]:
         """Reset environment state by sampling initial position & mapping."""
 
-        # optimal_return used only for logging; same as bsuite:
         optimal_no_cost = (1 - params.deterministic) * (1 - 1 / self.size) ** (
             self.size - 1
         ) + params.deterministic * 1.0
         optimal_return = optimal_no_cost - params.unscaled_move_cost
 
-        # draw new action map or reuse previous
         a_map_rand = jax.random.bernoulli(key, 0.5, (self.size, self.size)).astype(
             jnp.int32
         )
@@ -176,20 +156,18 @@ class DeepSeaDet(environment.Environment):
         obs = self.get_obs(state, params)
         return obs, state
 
-    # ------------------------------------------------------------------
-    # Observation / termination / discount
-    # ------------------------------------------------------------------
+
     def get_obs(
         self,
         state: EnvState,
-        params: Optional[EnvParams] = None,   # <- was EnvParams | None
+        params: Optional[EnvParams] = None,   
         key: Any = None,
     ) -> jax.Array:
         """
         One-hot position on N x N grid until row >= N, then all zeros
         (absorbing).
         """
-        del key  # unused, for gymnax API compatibility
+        del key  
         obs_end = jnp.zeros((self.size, self.size), dtype=jnp.float32)
         end_cond = state.row >= self.size
         obs_upd = obs_end.at[state.row, state.column].set(1.0)
@@ -204,9 +182,7 @@ class DeepSeaDet(environment.Environment):
     def discount(self, state: EnvState, params: EnvParams) -> jax.Array:
         return 1.0 - self.is_terminal(state, params).astype(jnp.float32)
 
-    # ------------------------------------------------------------------
-    # Meta info / spaces
-    # ------------------------------------------------------------------
+
     @property
     def name(self) -> str:
         return "StochasticDeepSea-bsuite"
@@ -241,9 +217,6 @@ class DeepSeaDet(environment.Environment):
         )
 
 
-# ---------------------------------------------------------------------
-#  Reward / transition helpers (same as your original JAX DeepSea)
-# ---------------------------------------------------------------------
 def _step_reward(
     state: EnvState,
     action_right: jax.Array,
@@ -255,18 +228,15 @@ def _step_reward(
     """Reward for the selected action, including move cost and noise."""
     reward = 0.0
 
-    # +1 if at rightmost column and taking 'right'
     rew_cond = jnp.logical_and(state.column == size - 1, action_right)
     reward += rew_cond.astype(jnp.float32)
     denoised_return = state.denoised_return + rew_cond.astype(jnp.float32)
 
-    # Gaussian noise at chain ends (bottom row & edge columns) when stochastic.
     col_at_edge = jnp.logical_or(state.column == 0, state.column == size - 1)
     chain_end = jnp.logical_and(state.row == size - 1, col_at_edge)
     det_chain_end = jnp.logical_and(chain_end, jnp.logical_not(params.deterministic))
     reward += rand_reward * det_chain_end.astype(jnp.float32)
 
-    # Move cost for "right_cond" transitions
     reward -= right_cond.astype(jnp.float32) * params.unscaled_move_cost / size
     return reward, denoised_return
 
@@ -279,21 +249,18 @@ def _step_transition(
 ) -> Tuple[jax.Array, int, jax.Array]:
     """State transition for the selected action (bsuite-style)."""
 
-    # Standard right path transition (with slip)
     column = jax.lax.select(
         right_cond,
         jnp.clip(state.column + 1, 0, size - 1),
         state.column,
     )
 
-    # If action not right, move left
     column = jax.lax.select(
         action_right,
         column,
         jnp.clip(state.column - 1, 0, size - 1),
     )
 
-    # Track whether we ever left the optimal right path (bad_episode)
     right_wrong_cond = jnp.logical_and(
         jnp.logical_not(action_right),
         state.row == column,

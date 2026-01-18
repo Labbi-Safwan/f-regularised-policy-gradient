@@ -1,28 +1,3 @@
-# plot_separate_nchain_deepsea_and_legend.py
-#
-# Saves each (env, size) plot as its own PDF with figsize=(4,3),
-# and saves the legend as a separate PDF.
-#
-# Folder naming:
-#   fpg       : step_{step}_alpha_{alpha}_temperature_{temp}
-#   logbarrier: step_{step}_temperature_{temp}
-#   escort    : step_{step}_alpha_{alpha}
-#   hadamard  : step_{step}
-#
-# Features:
-#   - Fixed (color, marker) per METHOD ENTRY (stable under subset plotting)
-#   - fill_between edges removed (no “double line” artifact)
-#   - optional alpha filtering for fPG
-#   - optional subsampling to reduce curve irregularity
-#
-# Output (default):
-#   plots/nchain_size_10.pdf
-#   plots/nchain_size_13.pdf
-#   plots/nchain_size_16.pdf
-#   plots/deepsea_size_13.pdf
-#   plots/deepsea_size_15.pdf
-#   plots/legend.pdf
-
 import os
 import pickle
 from typing import List, Dict, Optional, Any, Tuple
@@ -52,10 +27,7 @@ def subsample_series(
     std: np.ndarray,
     every: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Keep every 'every' points (plus always keep the last point).
-    This subsamples mean and std consistently.
-    """
+
     if every is None or every <= 1:
         return x, mean, std
 
@@ -67,11 +39,7 @@ def subsample_series(
     return x[idx], mean[idx], std[idx]
 
 
-# ---------------------------------------------------------------------
-# Folder parsers
-# ---------------------------------------------------------------------
 def parse_fpg(folder_name: str) -> Optional[Dict[str, float]]:
-    # step_{step}_alpha_{alpha}_temperature_{temp}
     parts = folder_name.split("_")
     if len(parts) != 6:
         return None
@@ -84,7 +52,6 @@ def parse_fpg(folder_name: str) -> Optional[Dict[str, float]]:
 
 
 def parse_logbarrier(folder_name: str) -> Optional[Dict[str, float]]:
-    # step_{step}_temperature_{temp}
     parts = folder_name.split("_")
     if len(parts) != 4:
         return None
@@ -97,7 +64,6 @@ def parse_logbarrier(folder_name: str) -> Optional[Dict[str, float]]:
 
 
 def parse_escort(folder_name: str) -> Optional[Dict[str, float]]:
-    # step_{step}_alpha_{alpha}
     parts = folder_name.split("_")
     if len(parts) != 4:
         return None
@@ -110,7 +76,6 @@ def parse_escort(folder_name: str) -> Optional[Dict[str, float]]:
 
 
 def parse_hadamard(folder_name: str) -> Optional[Dict[str, float]]:
-    # step_{step}
     parts = folder_name.split("_")
     if len(parts) != 2:
         return None
@@ -134,9 +99,6 @@ def parse_folder(algo_name: str, folder_name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ---------------------------------------------------------------------
-# Loading stats
-# ---------------------------------------------------------------------
 def load_config_stats(
     base_dir: str,
     env_size: int,
@@ -170,9 +132,6 @@ def load_config_stats(
     return {"mean": mean, "std": std}
 
 
-# ---------------------------------------------------------------------
-# Styling helpers
-# ---------------------------------------------------------------------
 def alpha_key(alpha: float, tol: float = 1e-8) -> float:
     """Normalize float alpha by rounding (avoids 0.30000000000004 issues)."""
     return float(np.round(alpha, 1))
@@ -205,9 +164,7 @@ def get_style_for_entry(
     return label, style["color"], style["marker"]
 
 
-# ---------------------------------------------------------------------
-# Plot one (env, size) on a given axis
-# ---------------------------------------------------------------------
+
 def plot_best_algos_on_ax(
     ax,
     read_root: str,
@@ -356,7 +313,6 @@ def plot_best_algos_on_ax(
                 Line2D([0], [0], color=color, marker=marker, linewidth=1.4, label=label)
             )
 
-    #ax.set_title(f"{env_name} — size {env_size}", fontsize=fontsize, **font)
     ax.grid(linestyle="--", alpha=0.5)
     ax.tick_params(labelsize=fontsize - 3)
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
@@ -365,13 +321,9 @@ def plot_best_algos_on_ax(
     return legend_handles
 
 
-# ---------------------------------------------------------------------
-# Save helpers
-# ---------------------------------------------------------------------
 def save_figure(fig: plt.Figure, path: str):
     create_folder_if_not_exists(os.path.dirname(path))
     fig.savefig(path, bbox_inches="tight")
-    #fig.savefig(path)
     plt.close(fig)
 
 
@@ -433,17 +385,13 @@ def make_legend_figure(
     return fig
 
 
-# ---------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------
 if __name__ == "__main__":
     read_root = "./experiments"
     out_dir = "./plots"
 
-    seeds = list(range(16))  # 0..15
+    seeds = list(range(16)) 
     max_iter = None
 
-    # Choose which algorithms to include (your example uses only these):
     algorithms = ["fpg", "logbarrier",'escort','hadamard']
 
     nchain_sizes = [10, 15, 20]
@@ -452,7 +400,6 @@ if __name__ == "__main__":
     fontsize = 16
     font = {"family": "serif"}
 
-    # Stable, paper-wide styles
     STYLE_FPG = {
         0.1: {"color": "#0173B2", "marker": "o"},
         0.3: {"color": "#029E73", "marker": "s"},
@@ -467,16 +414,12 @@ if __name__ == "__main__":
         "hadamard": {"color": "#F0E442", "marker": "^"},
     }
 
-    # fPG alphas to show (None = all)
     fpg_alphas_to_plot = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
     fpg_alpha_tol = 1e-8
 
-    # Subsample points (set to 1 to disable)
     subsample_every = 300
 
-    # --------------------------------------------------------------
-    # Save each plot separately
-    # --------------------------------------------------------------
+
     legend_handles_final: Optional[List[Line2D]] = None
 
     for sz in nchain_sizes:
@@ -517,15 +460,13 @@ if __name__ == "__main__":
         legend_handles_final = legend_handles
         save_figure(fig, os.path.join(out_dir, f"deepsea_size_{sz}.pdf"))
 
-    # --------------------------------------------------------------
-    # Save legend separately
-    # --------------------------------------------------------------
+
     if legend_handles_final is None:
         raise RuntimeError("No legend handles were generated (no plots were created).")
 
     fig_leg = make_legend_figure(
         legend_handles=legend_handles_final,
         fontsize=fontsize,
-        ncol=1,  # set to 2 if you want a wider legend block
+        ncol=1,  
     )
     save_figure(fig_leg, os.path.join(out_dir, "legend.pdf"))

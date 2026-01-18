@@ -1,5 +1,3 @@
-# ppo_noisy_mountaincar_onefile_fixed.py
-
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -8,12 +6,10 @@ import optax
 import pickle
 
 from flax.linen.initializers import constant, orthogonal
-from typing import NamedTuple, Any, Tuple
+from typing import NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
-
-import chex
-from gymnax.environments import environment, spaces
+import gymnax
 from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
 
 from itertools import product
@@ -23,103 +19,12 @@ from fdiv import AlphaDivergence
 
 
 # ============================================================
-# 1) JAX MountainCar (bsuite-like)
+# 1) JAX Reward Noise wrapper (bsuite-style: no noise on first step)
 # ============================================================
 
-class MountainCarParams(NamedTuple):
-    min_pos: float = -1.2
-    max_pos: float = 0.6
-    max_speed: float = 0.07
-    goal_pos: float = 0.5
-    force: float = 0.001
-    gravity: float = 0.0025
-    max_steps: int = 1000
+class RewardNoiseParams(NamedTuple):
+    noise_scale: float
 
-
-class MountainCarState(NamedTuple):
-    position: jnp.ndarray
-    velocity: jnp.ndarray
-    t: jnp.ndarray
-
-
-class MountainCarEnv(environment.Environment):
-    """
-    bsuite-like MountainCar:
-      - reset position ~ Uniform[-0.6, -0.4], velocity=0, t=0
-      - actions {0,1,2} -> (action-1) in {-1,0,+1}
-      - reward = -1 each step
-      - done if position >= goal_pos OR t >= max_steps
-      - obs = [position, velocity, t/max_steps] (shape (3,))
-    """
-    def __init__(self):
-        super().__init__()
-
-    @property
-    def default_params(self) -> MountainCarParams:
-        return MountainCarParams()
-
-    def observation_space(self, params: MountainCarParams):
-        high = jnp.array([jnp.finfo(jnp.float32).max] * 3)
-        return spaces.Box(-high, high, (3,), jnp.float32)
-
-    def action_space(self, params: MountainCarParams):
-        return spaces.Discrete(3)
-
-    def reset(self, key: chex.PRNGKey, params: MountainCarParams) -> Tuple[jnp.ndarray, MountainCarState]:
-        position = jax.random.uniform(key, (), minval=-0.6, maxval=-0.4)
-        velocity = jnp.array(0.0, dtype=jnp.float32)
-        t = jnp.array(0, dtype=jnp.int32)
-
-        state = MountainCarState(position=position, velocity=velocity, t=t)
-
-        # ---- FIX: do NOT use float(params.max_steps) under jit ----
-        max_steps_f = jnp.asarray(params.max_steps, dtype=jnp.float32)
-        obs = jnp.array([position, velocity, t.astype(jnp.float32) / max_steps_f], dtype=jnp.float32)
-
-        return obs, state
-
-    def step(
-        self,
-        key: chex.PRNGKey,
-        state: MountainCarState,
-        action: jnp.ndarray,
-        params: MountainCarParams,
-    ) -> Tuple[jnp.ndarray, MountainCarState, jnp.ndarray, jnp.ndarray, dict]:
-
-        # time
-        t = state.t + jnp.array(1, dtype=jnp.int32)
-
-        # reward = -1
-        reward = jnp.array(-1.0, dtype=jnp.float32)
-
-        # dynamics
-        position = state.position
-        velocity = state.velocity
-
-        velocity = velocity + (action.astype(jnp.float32) - 1.0) * params.force + jnp.cos(3.0 * position) * (-params.gravity)
-        velocity = jnp.clip(velocity, -params.max_speed, params.max_speed)
-
-        position = position + velocity
-        position = jnp.clip(position, params.min_pos, params.max_pos)
-
-        velocity = jnp.where(position == params.min_pos, jnp.clip(velocity, 0.0, params.max_speed), velocity)
-
-        next_state = MountainCarState(position=position, velocity=velocity, t=t)
-
-        # ---- FIX: do NOT use float(params.max_steps) under jit ----
-        max_steps_f = jnp.asarray(params.max_steps, dtype=jnp.float32)
-        obs = jnp.array([position, velocity, t.astype(jnp.float32) / max_steps_f], dtype=jnp.float32)
-
-        done = (position >= params.goal_pos) | (t >= params.max_steps)
-
-        info = {"position": position, "velocity": velocity, "t": t}
-        return obs, next_state, reward, done.astype(jnp.float32), info
-
-
-# ============================================================
-# 2) Reward noise wrapper (JAX, bsuite-style)
-#     IMPORTANT FIX: step signature must be (key, state, action, params)
-# ============================================================
 
 class RewardNoiseState(NamedTuple):
     env_state: Any
@@ -128,17 +33,15 @@ class RewardNoiseState(NamedTuple):
 
 class RewardNoiseWrapperJAX:
     """
-    Adds reward noise: r <- r + sigma * N(0,1)
-    BUT does NOT add noise on the first step after reset (bsuite-style).
+    Wraps a gymnax-like env:
+      reset(key, params) -> obs, state
+      step(key, state, action, params) -> obs, state, reward, done, info
 
-    NOTE: noise_scale is stored in the wrapper instance so that
-    step signature remains gymnax-compatible:
-      step(key, state, action, params)
+    Adds reward noise: r <- r + sigma * N(0,1)
+    BUT does NOT add noise on the first timestep after reset (bsuite behaviour).
     """
-    def __init__(self, env, noise_scale: float):
+    def __init__(self, env):
         self._env = env
-        # store as JAX scalar (safe inside jit)
-        self.noise_scale = jnp.asarray(noise_scale, dtype=jnp.float32)
 
     def observation_space(self, params):
         return self._env.observation_space(params)
@@ -150,11 +53,11 @@ class RewardNoiseWrapperJAX:
         obs, st = self._env.reset(key, params)
         return obs, RewardNoiseState(env_state=st, is_first=jnp.array(True))
 
-    def step(self, key, state: RewardNoiseState, action, params):
+    def step(self, key, state: RewardNoiseState, action, params, noise_params: RewardNoiseParams):
         key_env, key_noise = jax.random.split(key, 2)
         obs, st, reward, done, info = self._env.step(key_env, state.env_state, action, params)
 
-        noise = self.noise_scale * jax.random.normal(key_noise, shape=reward.shape)
+        noise = noise_params.noise_scale * jax.random.normal(key_noise, shape=reward.shape)
         reward_noisy = jnp.where(state.is_first, reward, reward + noise)
 
         next_state = RewardNoiseState(env_state=st, is_first=jnp.array(False))
@@ -169,10 +72,11 @@ class RewardNoiseWrapperJAX:
 
 
 # ============================================================
-# 3) PPO network + transition
+# 2) PPO Network + Transition
 # ============================================================
 
 class ActorCritic(nn.Module):
+    """Actor-Critic network with Tsallis-softmax parametrisation."""
     action_dim: int
     f_softargmax_fn: callable
     activation: str = "tanh"
@@ -206,15 +110,15 @@ class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
     value: jnp.ndarray
-    reward: jnp.ndarray
-    reg_reward: jnp.ndarray
+    reward: jnp.ndarray      
+    reg_reward: jnp.ndarray   
     log_prob: jnp.ndarray
     obs: jnp.ndarray
     info: Any
 
 
 # ============================================================
-# 4) Train function
+# 3) Train function
 # ============================================================
 
 def make_train(config):
@@ -223,16 +127,15 @@ def make_train(config):
     print(f"num updates: {config['NUM_UPDATES']}")
     config["MINIBATCH_SIZE"] = config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
 
-    # ----- env -----
-    base_env = MountainCarEnv()
-    env_params = base_env.default_params
+    # ---------- ENV ----------
+    # Base env from gymnax
+    env, env_params = gymnax.make(config["ENV_NAME"])
+    env = FlattenObservationWrapper(env)
+    env = LogWrapper(env)
 
-    # noisy rewards (noise scale stored inside wrapper instance)
-    noisy_env = RewardNoiseWrapperJAX(base_env, noise_scale=float(config["NOISE_SCALE"]))
-
-    # gymnax wrappers (now compatible because noisy_env.step has 4-arg signature)
-    noisy_env = FlattenObservationWrapper(noisy_env)
-    noisy_env = LogWrapper(noisy_env)
+    # Wrap with reward noise (JAX)
+    noisy_env = RewardNoiseWrapperJAX(env)
+    noise_params = RewardNoiseParams(noise_scale=float(config["NOISE_SCALE"]))
 
     def linear_schedule(base_lr, count):
         config["LR_END"] = config.get("LR_END", 0.0)
@@ -260,7 +163,6 @@ def make_train(config):
             activation=config["ACTIVATION"],
             f_softargmax_fn=alpha_softargmax,
         )
-
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(noisy_env.observation_space(env_params).shape)
         network_params = network.init(_rng, init_x)
@@ -275,7 +177,6 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(learning_rate, eps=1e-5),
             )
-
         train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
 
         # INIT env state
@@ -287,19 +188,21 @@ def make_train(config):
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, rng = runner_state
 
+                # action
                 rng, _rng = jax.random.split(rng)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
 
+                # env step (NOISY rewards)
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-
-                # IMPORTANT: now step is 4-arg, wrapper-safe
                 obsv, env_state, reward, done, info = jax.vmap(
-                    noisy_env.step, in_axes=(0, 0, 0, None)
-                )(rng_step, env_state, action, env_params)
+                    lambda k, st, a: noisy_env.step(k, st, a, env_params, noise_params),
+                    in_axes=(0, 0, 0),
+                )(rng_step, env_state, action)
 
+                # Tsallis regularisation term on policy (same as before)
                 probs = pi.probs
                 num_actions = probs.shape[-1]
                 uniform = jnp.ones_like(probs) / num_actions
@@ -326,9 +229,12 @@ def make_train(config):
             def _calculate_gae(traj_batch, last_val):
                 def _get_adv(gae_and_next_value, transition: Transition):
                     gae, next_value = gae_and_next_value
-                    delta = transition.reg_reward + config["GAMMA"] * next_value * (1.0 - transition.done) - transition.value
-                    gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1.0 - transition.done) * gae
-                    return (gae, transition.value), gae
+                    done = transition.done
+                    value = transition.value
+                    reg_reward = transition.reg_reward
+                    delta = reg_reward + config["GAMMA"] * next_value * (1.0 - done) - value
+                    gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1.0 - done) * gae
+                    return (gae, value), gae
 
                 (_, _), advantages = jax.lax.scan(
                     _get_adv,
@@ -378,21 +284,22 @@ def make_train(config):
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
                 assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
 
-                perm = jax.random.permutation(_rng, batch_size)
+                permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_ep, adv_ep, tgt_ep)
+
                 batch = jax.tree_util.tree_map(lambda x: x.reshape((batch_size,) + x.shape[2:]), batch)
-                batch = jax.tree_util.tree_map(lambda x: jnp.take(x, perm, axis=0), batch)
+                shuffled = jax.tree_util.tree_map(lambda x: jnp.take(x, permutation, axis=0), batch)
 
                 minibatches = jax.tree_util.tree_map(
                     lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
-                    batch,
+                    shuffled,
                 )
 
                 train_state, total_loss = jax.lax.scan(_update_minibatch, train_state, minibatches)
                 return (train_state, traj_ep, adv_ep, tgt_ep, rng), total_loss
 
             update_state = (train_state, traj_batch, advantages, targets, rng)
-            update_state, _ = jax.lax.scan(_update_epoch, update_state, None, config["UPDATE_EPOCHS"])
+            update_state, _loss_info = jax.lax.scan(_update_epoch, update_state, None, config["UPDATE_EPOCHS"])
             train_state = update_state[0]
             rng = update_state[-1]
 
@@ -408,7 +315,7 @@ def make_train(config):
 
 
 # ============================================================
-# 5) Run gridsearch
+# 4) Run
 # ============================================================
 
 def run():
@@ -426,8 +333,9 @@ def run():
         "ACTIVATION": "tanh",
         "ANNEAL_LR": True,
 
-        # noisy mountain car
-        "NOISE_SCALE": 0.1,
+        # ---- noisy cartpole ----
+        "ENV_NAME": "CartPole-v1",   # if this errors, try "CartPole"
+        "NOISE_SCALE": 10.0,
     }
 
     rng = jax.random.PRNGKey(42)
@@ -456,6 +364,7 @@ def run():
             train_vmap_entropy(entropy_coeff, reg_value, param_value, lrs, seeds)
         )
         host_results = jax.device_get(batch_results)
+
         rewards = host_results["metrics"]["returned_episode_returns"]
 
         for e_idx, entropy_value in enumerate(entropy_values):
@@ -472,10 +381,11 @@ def run():
                         "rewards": np.array(current_rewards),
                     })
 
-    out = "mountaincar_noisy_results.pkl"
+    out = "cartpole_noisy_results_"+ str(general_config["NOISE_SCALE"])+ ".pkl"
     with open(out, "wb") as fp:
         pickle.dump(records, fp)
     print("Saved:", out)
+
     return records
 
 

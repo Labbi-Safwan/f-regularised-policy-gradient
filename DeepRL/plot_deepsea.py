@@ -1,4 +1,3 @@
-# plot_separate_deepsea_only.py  (with subsampling)
 import os
 import pickle
 import numpy as np
@@ -31,10 +30,7 @@ def subsample_series(
     std_or_se: np.ndarray,
     every: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Keep every 'every' points (plus always keep the last point).
-    This subsamples mean and std/se consistently.
-    """
+
     if every is None or every <= 1:
         return x, mean, std_or_se
 
@@ -125,9 +121,6 @@ def make_legend_figure(
     return fig
 
 
-# ---------------------------------------------------------------------
-# Main plotting routine (DeepSea only)
-# ---------------------------------------------------------------------
 def make_single_deepsea_plot(
     size: int,
     results_folder: Path,
@@ -151,7 +144,6 @@ def make_single_deepsea_plot(
 
     grouped, metadata = build_groupings(raw_records)
 
-    # Pick best (lr, entropy) per (reg_alpha, param_alpha) based on last-100 average.
     best_curves: Dict[Tuple[float, float], Dict[str, Any]] = {}
     for reg_alpha in metadata["reg_alpha"]:
         for param_alpha in metadata["param_alpha"]:
@@ -177,7 +169,6 @@ def make_single_deepsea_plot(
             if pair_best_entry is not None:
                 best_curves[(reg_alpha, param_alpha)] = pair_best_entry
 
-    # Diagonal entries: coupled case (reg_alpha == param_alpha)
     diag_stats = [
         ((reg_alpha, param_alpha), stats)
         for (reg_alpha, param_alpha), stats in best_curves.items()
@@ -191,12 +182,10 @@ def make_single_deepsea_plot(
     legend_handles: List[Line2D] = []
 
     for ((reg_a, param_a), stats) in diag_stats:
-        # scale x
         x = stats["x"] / scale_x
         mean = stats["mean"]
         se = stats["se"]
 
-        # ---- subsample (same behavior as your other script) ----
         xs, ms, ss = subsample_series(x, mean, se, subsample_every)
 
         label, color, marker = get_style_for_alpha(
@@ -230,7 +219,6 @@ def make_single_deepsea_plot(
             Line2D([0], [0], color=color, marker=marker, linewidth=1.4, label=label)
         )
 
-    #ax.set_title(rf"$\text{{Size }}\,{size}$", fontsize=fontsize, **font)
     ax.set_xlabel(r"Steps ($\times 10^4$)", fontsize=fontsize, **font)
     ax.set_ylabel("Average return", fontsize=fontsize, **font)
 
@@ -263,8 +251,7 @@ if __name__ == "__main__":
     }
     fpg_alpha_tol = 1e-8
 
-    # ---- same idea as your other script ----
-    subsample_every = 1000  # set to 1 to disable
+    subsample_every = 1000  
 
     out_dir = "./plots"
     create_folder_if_not_exists(out_dir)

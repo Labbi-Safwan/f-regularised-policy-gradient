@@ -25,29 +25,16 @@ def save_results_to_pickle(file_path: str, data):
         pickle.dump(data, f)
 
 
-# ----------------------------------------------------------------------
-# Env factories (JAX envs with reset / step)
-# ----------------------------------------------------------------------
+
 ENV_FACTORIES = {
     "deepsea": lambda size: DeepSeaDet(size=size),
     "nchain": lambda size: NChain(n=size),
 }
 
 
-# ----------------------------------------------------------------------
-# Build a PPO-style train() for tabular PG
-# ----------------------------------------------------------------------
+
 def make_train(env_name: str, size: int, algo_name: str, base_algo_kwargs: dict):
-    """
-    Build a jitted training function:
 
-      train(step_size, alpha_alg, temp, seed) -> J_hist (T,)
-
-    Note:
-      - For algorithms that do not use alpha/temp, we still accept them as args
-        (to keep a single vmap signature), but they are ignored.
-      - alpha_alg and temp are static for jit.
-    """
     env = ENV_FACTORIES[env_name](size)
     params = env.default_params
 
@@ -75,23 +62,20 @@ def make_train(env_name: str, size: int, algo_name: str, base_algo_kwargs: dict)
         if algo_name == "fpg":
             algo_conf = algo_factory(alpha=alpha_alg, step_size=step_size, f_temp=temp)
         elif algo_name == "logbarrier":
-            # alpha_alg ignored by design
             algo_conf = algo_factory(step_size=step_size, lb_lambda=temp)
         elif algo_name == "escort":
-            # temp ignored by design
             algo_conf = algo_factory(p=alpha_alg, step_size=step_size)
         elif algo_name == "hadamard":
-            # alpha_alg and temp ignored by design
             algo_conf = algo_factory(step_size=step_size)
         else:
             raise ValueError(f"Unsupported algo_name: {algo_name}")
 
         init_theta = algo_conf["init_theta"]
-        update_step = algo_conf["update_step"]  # jitted, env/H/B static
+        update_step = algo_conf["update_step"]  
 
         key = jax.random.PRNGKey(seed)
         key_init, key = jax.random.split(key)
-        theta0 = init_theta(key_init)  # (S, A)
+        theta0 = init_theta(key_init) 
 
         def body(carry, _):
             key_c, theta_c = carry
@@ -170,7 +154,6 @@ if __name__ == "__main__":
     env_name = args.environment
     size = args.size
 
-    # Full CLI lists (we will selectively use them depending on algo_name)
     alpha_list_cli = args.alpha
     steps = args.step
     temperatures_cli = args.temperature
@@ -190,33 +173,31 @@ if __name__ == "__main__":
 
     train_fn = make_train(env_name, size, algo_name, algo_kwargs)
 
-    # JAX arrays for vmap
     steps_arr = jnp.array(steps)
     seeds_arr = jnp.array(seed_list, dtype=jnp.int32)
 
     train_vmap_seeds = jax.vmap(train_fn, in_axes=(None, None, None, 0))
     train_vmap_steps = jax.vmap(train_vmap_seeds, in_axes=(0, None, None, None))
 
-    # Decide which grids to loop over + defaults for "unused" hyperparams
-    # (We keep a single train_fn signature; unused args are ignored inside train()).
+
     if algo_name == "fpg":
         alpha_grid = list(alpha_list_cli)
         temp_grid = list(temperatures_cli)
         alpha_default = None
         temp_default = None
     elif algo_name == "logbarrier":
-        alpha_grid = [1.0]  # not used; do not loop
-        temp_grid = list(temperatures_cli)  # lb_lambda grid
+        alpha_grid = [1.0]  
+        temp_grid = list(temperatures_cli) 
         alpha_default = 1.0
         temp_default = None
     elif algo_name == "escort":
-        alpha_grid = list(alpha_list_cli)  # p grid
-        temp_grid = [1.0]  # not used; do not loop
+        alpha_grid = list(alpha_list_cli)  
+        temp_grid = [1.0]  
         alpha_default = None
         temp_default = 1.0
     elif algo_name == "hadamard":
-        alpha_grid = [1.0]  # not used; do not loop
-        temp_grid = [1.0]  # not used; do not loop
+        alpha_grid = [1.0] 
+        temp_grid = [1.0]  
         alpha_default = 1.0
         temp_default = 1.0
     else:
@@ -232,7 +213,6 @@ if __name__ == "__main__":
 
     for alpha_alg in alpha_grid:
         for temp in temp_grid:
-            # Nice printing of what is actually looping
             if algo_name == "fpg":
                 grid_msg = f"alpha={alpha_alg}, temp={temp}"
             elif algo_name == "logbarrier":
@@ -247,12 +227,10 @@ if __name__ == "__main__":
                 f"(steps x seeds = {len(steps)} x {len(seed_list)})"
             )
 
-            # Run all (steps, seeds) in parallel for this config
             J_all = jax.block_until_ready(train_vmap_steps(steps_arr, alpha_alg, temp, seeds_arr))
-            J_all = np.array(J_all)  # (n_steps, n_seeds, T)
+            J_all = np.array(J_all)  
 
             for i_step, step_size in enumerate(steps):
-                # Folder naming WITHOUT irrelevant hyperparams
                 if algo_name == "fpg":
                     folder_name = f"step_{step_size}_alpha_{alpha_alg}_temperature_{temp}"
                 elif algo_name == "logbarrier":
@@ -268,14 +246,13 @@ if __name__ == "__main__":
                 create_folder_if_not_exists(parent_directory)
 
                 for i_seed, seed in enumerate(seed_list):
-                    mc_returns = J_all[i_step, i_seed]  # (T,)
+                    mc_returns = J_all[i_step, i_seed] 
                     outfile = os.path.join(
                         parent_directory,
                         f"size_{size}_seed_{seed}_true_objective.pkl",
                     )
                     save_results_to_pickle(outfile, mc_returns)
                     if args.verbose:
-                        # Print only relevant hyperparams
                         if algo_name == "fpg":
                             msg = f"step={step_size}, alpha={alpha_alg}, temp={temp}, seed={seed}"
                         elif algo_name == "logbarrier":

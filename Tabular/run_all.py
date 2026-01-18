@@ -1,16 +1,11 @@
-#!/usr/bin/env python
 import subprocess
 import sys
 from itertools import product
 
-# Path to your main script
 MAIN_SCRIPT = "main.py"
 
-# Algorithms and environments you want to sweep
 ALGORITHMS = ["hadamard","escort","logbarrier","fpg"]
-#ALGORITHMS = ["hadamard"]
 ENVIRONMENTS = ["nchain","deepsea"]
-#ENVIRONMENTS = ["deepsea"]
 SIZES = [10,15,20]
 
 COMMON_ARGS = []
@@ -28,7 +23,7 @@ def main():
         )
 
         cmd = [
-            sys.executable,  # same Python used to run this script
+            sys.executable,
             MAIN_SCRIPT,
             "--algorithm", algo,
             "--environment", env_name,
@@ -42,8 +37,7 @@ def main():
                 f"!! Job failed for algo={algo}, env={env_name}, size={size} "
                 f"with return code {e.returncode}"
             )
-            # You can choose to continue or break here.
-            # For now, continue to next job.
+
             continue
 
     print("All jobs finished (or failed ones were skipped).")
